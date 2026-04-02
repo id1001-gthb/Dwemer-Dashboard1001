@@ -879,12 +879,14 @@ $patronScrollDurationSeconds = max(100, min(350, intval(round(($patronActiveCoun
 
         .patron-title {
             margin: 0 0 14px;
+            width: 90%;
             font-size: 24px;
             color: #ffffff;
             line-height: 1.2;
             font-family: 'MagicCards', serif;
             letter-spacing: 0.4px;
             word-spacing: 6px;
+            text-align: right;
             text-shadow:
                 -1px -1px 0 #000,
                  1px -1px 0 #000,
@@ -1276,15 +1278,15 @@ $patronScrollDurationSeconds = max(100, min(350, intval(round(($patronActiveCoun
             </div>
         </section>
 
-        <aside class="patron-shell" aria-label="Current patron members">
-            <h2 class="patron-title"><a class="patron-title-link" href="<?= htmlspecialchars($patreonCampaignUrl, ENT_QUOTES, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer">Patron Members</a></h2>
+        <aside class="patron-shell" aria-label="Current Patreon members">
+            <h2 class="patron-title"><a class="patron-title-link" href="<?= htmlspecialchars($patreonCampaignUrl, ENT_QUOTES, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer">Patreon Members</a></h2>
             <?php if ($patronSyncNote !== ''): ?>
                 <p class="patron-sync-note"><?= htmlspecialchars($patronSyncNote, ENT_QUOTES, 'UTF-8') ?></p>
             <?php endif; ?>
             <?php if ($patronActiveCount === 0): ?>
-                <p class="patron-empty">No patron members found yet. Run <code>csv/patreon_sync_local.php</code> to build <code>data/patron_members.generated.json</code>, or add fallback entries to <code>data/patron_members.json</code>.</p>
+                <p class="patron-empty">No Patreon members found yet. Run <code>csv/patreon_sync_local.php</code> to build <code>data/patron_members.generated.json</code>, or add fallback entries to <code>data/patron_members.json</code>.</p>
             <?php else: ?>
-                <div class="patron-list-scroll" aria-label="Patron members by tier">
+                <div class="patron-list-scroll" aria-label="Patreon members by tier">
                     <div class="patron-list-track">
                         <?php for ($patronListCycle = 0; $patronListCycle < 2; $patronListCycle++): ?>
                             <div class="patron-list-cycle" <?php if ($patronListCycle === 1): ?>aria-hidden="true"<?php endif; ?>>
