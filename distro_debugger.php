@@ -391,12 +391,13 @@ function parseLlmOutputBlocks(array $lines): array
     };
 
     foreach ($lines as $rawLine) {
-        $line = trim(strval($rawLine));
-        if ($line === '' || $line === '==') {
+        $line = rtrim(strval($rawLine), "\r\n");
+        $trimmed = trim($line);
+        if ($trimmed === '' || $trimmed === '==') {
             continue;
         }
 
-        if (preg_match('/^(?:==\s+)?(' . $timestampPattern . ')\s+START$/', $line, $matches) === 1) {
+        if (preg_match('/^(?:==\s+)?(' . $timestampPattern . ')\s+START\b.*$/i', $trimmed, $matches) === 1) {
             if ($inBlock) {
                 $pushBlock($currentBlock);
             }
@@ -408,7 +409,7 @@ function parseLlmOutputBlocks(array $lines): array
             continue;
         }
 
-        if (preg_match('/^(?:==\s+)?(' . $timestampPattern . ')\s+END$/', $line, $matches) === 1) {
+        if (preg_match('/^(?:==\s+)?(' . $timestampPattern . ')\s+END\b.*$/i', $trimmed, $matches) === 1) {
             if ($inBlock && is_array($currentBlock)) {
                 $currentBlock['end_time'] = trim($matches[1]);
                 $pushBlock($currentBlock);
