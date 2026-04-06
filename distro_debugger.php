@@ -556,6 +556,10 @@ function renderLogSection(array $source): void
                 if (!is_array($contentLines) || count($contentLines) === 0) {
                     continue;
                 }
+                $content = trim(implode("\n", array_map('strval', $contentLines)), "\r\n");
+                if ($content === '') {
+                    continue;
+                }
 
                 $startIso = timestampToIso8601($startTime);
                 $endIso = $endTime !== '' ? timestampToIso8601($endTime) : null;
@@ -583,15 +587,19 @@ function renderLogSection(array $source): void
                 echo '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2.5 1A1.5 1.5 0 0 0 1 2.5v8A1.5 1.5 0 0 0 2.5 12H3V2.5A1.5 1.5 0 0 1 4.5 1h-2z"/><path d="M4.5 2A1.5 1.5 0 0 0 3 3.5v10A1.5 1.5 0 0 0 4.5 15h8a1.5 1.5 0 0 0 1.5-1.5v-10A1.5 1.5 0 0 0 12.5 2h-8zm0 1h8a.5.5 0 0 1 .5.5v10a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-10a.5.5 0 0 1 .5-.5z"/></svg>';
                 echo '</button>';
                 echo '</div>';
-                echo '<div class="log-message llm-output-message">';
-                foreach ($contentLines as $line) {
-                    $lineText = trim(strval($line));
-                    if ($lineText === '') {
-                        continue;
+                if (strpos($id, 'stobe_') === 0) {
+                    echo '<div class="log-message"><pre class="llm-content llm-copy-content">' . h($content) . '</pre></div>';
+                } else {
+                    echo '<div class="log-message llm-output-message">';
+                    foreach ($contentLines as $line) {
+                        $lineText = trim(strval($line));
+                        if ($lineText === '') {
+                            continue;
+                        }
+                        echo '<div class="llm-output-line llm-copy-content">' . h($lineText) . '</div>';
                     }
-                    echo '<div class="llm-output-line llm-copy-content">' . h($lineText) . '</div>';
+                    echo '</div>';
                 }
-                echo '</div>';
                 echo '</div>';
             }
         } elseif ($rawMode) {
