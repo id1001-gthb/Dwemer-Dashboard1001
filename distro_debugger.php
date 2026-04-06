@@ -141,6 +141,24 @@ function isStandaloneLevelToken(string $value): bool
     return preg_match('/^(TRACE|DEBUG|INFO|WARN(?:ING)?|ERROR|CRIT(?:ICAL)?|FATAL)$/i', trim($value)) === 1;
 }
 
+function normalizePhpSeverity(string $value): string
+{
+    $severity = strtolower(trim($value));
+    if ($severity === '') {
+        return '';
+    }
+    if (str_contains($severity, 'fatal') || str_contains($severity, 'parse') || str_contains($severity, 'error')) {
+        return 'error';
+    }
+    if (str_contains($severity, 'warning') || str_contains($severity, 'deprecated')) {
+        return 'warn';
+    }
+    if (str_contains($severity, 'notice') || str_contains($severity, 'strict')) {
+        return 'info';
+    }
+    return normalizeLogLevel($severity);
+}
+
 function parseStructuredStartLine(string $line): ?array
 {
     $timestamp = '';
@@ -155,6 +173,28 @@ function parseStructuredStartLine(string $line): ?array
             'timestamp' => $timestamp,
             'level' => $level,
             'message' => $message === '' ? $line : $message,
+        ];
+    }
+
+    if (
+        preg_match(
+            '/^\[(\d{2}-[A-Za-z]{3}-\d{4}\s+\d{2}:\d{2}:\d{2}(?:\s+(?:UTC|Z|[+\-]\d{2}:?\d{2}|[A-Z]{2,5}))?)\]\s+PHP\s+([^:]+):\s*(.*)$/i',
+            $line,
+            $matches
+        ) === 1
+    ) {
+        $timestamp = trim($matches[1]);
+        $phpSeverity = trim($matches[2]);
+        $level = normalizePhpSeverity($phpSeverity);
+        $phpMessage = trim($matches[3]);
+        $message = 'PHP ' . $phpSeverity . ':';
+        if ($phpMessage !== '') {
+            $message .= ' ' . $phpMessage;
+        }
+        return [
+            'timestamp' => $timestamp,
+            'level' => $level,
+            'message' => $message,
         ];
     }
 
@@ -280,6 +320,8 @@ function timestampToIso8601(string $timestamp): ?string
     $formats = [
         'Y-m-d H:i:s.u',
         'Y-m-d H:i:s',
+        'd-M-Y H:i:s T',
+        'd-M-Y H:i:s',
         'Y-m-d\TH:i:s.uP',
         'Y-m-d\TH:i:sP',
         'D M d H:i:s.u Y',
@@ -1070,13 +1112,12 @@ $distroLogSources = [
 $chimLogSources = [
     [
         'id' => 'chim_apache_error',
-        'title' => 'Apache Mirror (apache_error.log)',
+        'title' => 'Apache Logs (apache_error.log)',
         'candidates' => buildFileCandidates($herikaLogDirs, ['apache_error.log']),
     ],
     [
         'id' => 'chim_core',
         'title' => 'CHIM Log (chim.log)',
-        'raw' => true,
         'candidates' => buildFileCandidates($herikaLogDirs, ['chim.log']),
     ],
     [
@@ -1133,6 +1174,11 @@ $chimLogSources = [
 
 $stobeLogSources = [
     [
+        'id' => 'stobe_php_error',
+        'title' => 'Apache Logs (apache_error.log)',
+        'candidates' => buildFileCandidates($stobeLogDirs, ['apache_error.log', 'php_error.log']),
+    ],
+    [
         'id' => 'stobe_server',
         'title' => 'Stobe Server (stobeserver.log)',
         'candidates' => buildFileCandidates($stobeLogDirs, ['stobeserver.log']),
@@ -1150,30 +1196,14 @@ $stobeLogSources = [
         'candidates' => buildFileCandidates($stobeLogDirs, ['context_sent_to_llm.log']),
     ],
     [
-        'id' => 'stobe_php_error',
-        'title' => 'PHP Errors (php_error.log)',
-        'raw' => true,
-        'candidates' => buildFileCandidates($stobeLogDirs, ['php_error.log']),
-    ],
-    [
-        'id' => 'stobe_import',
-        'title' => 'Stobe Import (stobe_import.log)',
-        'candidates' => buildFileCandidates($stobeLogDirs, ['stobe_import.log']),
-    ],
-    [
         'id' => 'stobe_llm_context_fast',
         'title' => 'LLM Context Fast (context_sent_to_llm_fast.log)',
         'candidates' => buildFileCandidates($stobeLogDirs, ['context_sent_to_llm_fast.log']),
     ],
     [
-        'id' => 'stobe_plugin_output',
-        'title' => 'Output To Plugin (output_to_plugin.log)',
-        'candidates' => buildFileCandidates($stobeLogDirs, ['output_to_plugin.log', 'ouput_to_plugin.log']),
-    ],
-    [
-        'id' => 'stobe_audit_request_file',
-        'title' => 'Audit Request File (audit_request.log)',
-        'candidates' => buildFileCandidates($stobeLogDirs, ['audit_request.log']),
+        'id' => 'stobe_import',
+        'title' => 'Stobe Import (stobe_import.log)',
+        'candidates' => buildFileCandidates($stobeLogDirs, ['stobe_import.log']),
     ],
     [
         'id' => 'stobe_relationship_worker',
