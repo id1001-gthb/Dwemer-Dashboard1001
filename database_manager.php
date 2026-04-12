@@ -62,8 +62,14 @@ $hash = isset($matches[1]) ? $matches[1] : 'default';
 
 $db=new sql();
 $GLOBALS["db"] = $db;
-$res=$db->fetchAll("select max(gamets) as last_gamets from eventlog");
-$last_gamets=$res[0]["last_gamets"]+1;
+$last_gamets = 1;
+try {
+    $res = $db->fetchAll("select max(gamets) as last_gamets from eventlog");
+    $lastGametsValue = intval($res[0]["last_gamets"] ?? 0);
+    $last_gamets = $lastGametsValue + 1;
+} catch (Throwable $e) {
+    $last_gamets = 1;
+}
 
 // Enable error reporting (for development purposes)
 error_reporting(E_ALL);
@@ -83,6 +89,10 @@ $password = 'dwemer';
 
 // Initialize message variable
 $message = '';
+if (isset($_SESSION['database_manager_flash_message'])) {
+    $message = strval($_SESSION['database_manager_flash_message']);
+    unset($_SESSION['database_manager_flash_message']);
+}
 
 // PHP function to format file sizes
 function formatFileSize($bytes) {
@@ -145,6 +155,125 @@ function formatVersionDate($version) {
         return "{$year}-{$month}-{$day} (rev {$revision})";
     }
     return $version;
+}
+
+function setDatabaseManagerFlashMessage(string $message): void
+{
+    $_SESSION['database_manager_flash_message'] = $message;
+}
+
+function getPublicTableRowCount($db, string $tableName): ?int
+{
+    if (!preg_match('/^[a-zA-Z0-9_]+$/', $tableName)) {
+        return null;
+    }
+
+    try {
+        $row = $db->fetchOne("SELECT COUNT(*) AS count FROM public.{$tableName}");
+        return intval($row['count'] ?? 0);
+    } catch (Throwable $e) {
+        return null;
+    }
+}
+
+function recreateBootstrapTableFromSqlFile($db, string $tableName, string $sequenceName, string $sqlFilePath, array &$notes): bool
+{
+    if (!dropBootstrapTableIfExists($db, $tableName, $sequenceName, $notes)) {
+        return false;
+    }
+
+    if (!file_exists($sqlFilePath)) {
+        $notes[] = "Missing schema file for {$tableName}: {$sqlFilePath}";
+        return false;
+    }
+
+    $sql = file_get_contents($sqlFilePath);
+    if ($sql === false || trim($sql) === '') {
+        $notes[] = "Failed to read schema file for {$tableName}.";
+        return false;
+    }
+
+    try {
+        $db->execQuery($sql);
+        $db->execQuery("SET search_path TO public");
+        $notes[] = "Recreated {$tableName} from schema seed.";
+        return true;
+    } catch (Throwable $e) {
+        $notes[] = "Failed to recreate {$tableName}: " . $e->getMessage();
+        return false;
+    }
+}
+
+function dropBootstrapTableIfExists($db, string $tableName, string $sequenceName, array &$notes): bool
+{
+    try {
+        $db->execQuery("DROP TABLE IF EXISTS public.{$tableName} CASCADE");
+        if ($sequenceName !== '') {
+            $db->execQuery("DROP SEQUENCE IF EXISTS public.{$sequenceName} CASCADE");
+        }
+        $notes[] = "Dropped {$tableName} for bootstrap repair.";
+        return true;
+    } catch (Throwable $e) {
+        $notes[] = "Failed to drop {$tableName}: " . $e->getMessage();
+        return false;
+    }
+}
+
+function repairHerikaBootstrapTablesIfNeeded($db, string $herikaRoot, string &$outputText = ''): bool
+{
+    $notes = [];
+    $profileCount = getPublicTableRowCount($db, 'core_profiles');
+    $llmCount = getPublicTableRowCount($db, 'core_llm_connector');
+    $ttsCount = getPublicTableRowCount($db, 'core_tts_connector');
+    $apiBadgeCount = getPublicTableRowCount($db, 'core_api_badge');
+
+    $profilesEmpty = ($profileCount === 0);
+    $llmEmpty = ($llmCount === 0);
+    $ttsEmpty = ($ttsCount === 0);
+    $apiBadgesEmpty = ($apiBadgeCount === 0);
+
+    if (!$profilesEmpty && !$llmEmpty && !$ttsEmpty && !$apiBadgesEmpty) {
+        $outputText = 'No empty Herika bootstrap tables needed repair.';
+        return true;
+    }
+
+    $allOk = true;
+    $schemaRoot = rtrim($herikaRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'lib' . DIRECTORY_SEPARATOR . 'core' . DIRECTORY_SEPARATOR . 'database_schema' . DIRECTORY_SEPARATOR;
+
+    if ($profilesEmpty) {
+        $allOk = dropBootstrapTableIfExists($db, 'core_profiles', 'profiles_id_seq', $notes) && $allOk;
+    }
+    if ($llmEmpty && $profilesEmpty) {
+        $allOk = dropBootstrapTableIfExists($db, 'core_llm_connector', 'llm_connector_id_seq', $notes) && $allOk;
+    } elseif ($llmEmpty) {
+        $notes[] = 'Skipped core_llm_connector rebuild because core_profiles is not empty.';
+    }
+    if ($ttsEmpty && $profilesEmpty) {
+        $allOk = dropBootstrapTableIfExists($db, 'core_tts_connector', 'tts_connector_id_seq', $notes) && $allOk;
+    } elseif ($ttsEmpty) {
+        $notes[] = 'Skipped core_tts_connector rebuild because core_profiles is not empty.';
+    }
+    if ($apiBadgesEmpty && $profilesEmpty && $llmEmpty && $ttsEmpty) {
+        $allOk = dropBootstrapTableIfExists($db, 'core_api_badge', 'api_badge_id_seq', $notes) && $allOk;
+    } elseif ($apiBadgesEmpty) {
+        $notes[] = 'Skipped core_api_badge rebuild because dependent tables were not all empty.';
+    }
+
+    if ($apiBadgesEmpty && $profilesEmpty && $llmEmpty && $ttsEmpty) {
+        $allOk = recreateBootstrapTableFromSqlFile($db, 'core_api_badge', 'api_badge_id_seq', $schemaRoot . 'core_api_badge.sql', $notes) && $allOk;
+    }
+    if ($llmEmpty && $profilesEmpty) {
+        $allOk = recreateBootstrapTableFromSqlFile($db, 'core_llm_connector', 'llm_connector_id_seq', $schemaRoot . 'core_llm_connector.sql', $notes) && $allOk;
+    }
+    if ($ttsEmpty && $profilesEmpty) {
+        $allOk = recreateBootstrapTableFromSqlFile($db, 'core_tts_connector', 'tts_connector_id_seq', $schemaRoot . 'core_tts_connector.sql', $notes) && $allOk;
+    }
+    if ($profilesEmpty) {
+        $allOk = recreateBootstrapTableFromSqlFile($db, 'core_profiles', 'profiles_id_seq', $schemaRoot . 'core_profiles.sql', $notes) && $allOk;
+    }
+
+    $outputText = implode(PHP_EOL, $notes);
+    return $allOk;
 }
 
 function getDashboardBackupMarker(): string
@@ -620,6 +749,34 @@ function resetDatabaseSchemaToPublic(
     return $returnVar === 0;
 }
 
+function importSqlFileToDatabase(
+    string $dbName,
+    string $host,
+    string $port,
+    string $username,
+    string $password,
+    string $sqlFilePath,
+    string &$outputText = ''
+): bool {
+    if (!file_exists($sqlFilePath)) {
+        $outputText = "SQL file not found: {$sqlFilePath}";
+        return false;
+    }
+
+    $command = "PGPASSWORD=" . escapeshellarg($password)
+        . " psql -h " . escapeshellarg($host)
+        . " -p " . escapeshellarg($port)
+        . " -U " . escapeshellarg($username)
+        . " -d " . escapeshellarg($dbName)
+        . " -v ON_ERROR_STOP=1 -f " . escapeshellarg($sqlFilePath);
+
+    $output = [];
+    $returnVar = 0;
+    exec($command . " 2>&1", $output, $returnVar);
+    $outputText = trim(implode(PHP_EOL, $output));
+    return $returnVar === 0;
+}
+
 function runPhpScriptAndCapture(string $scriptPath, string &$outputText = ''): bool
 {
     $phpCandidates = [];
@@ -734,23 +891,27 @@ if (isset($_GET['action']) && $_GET['action'] === 'factory_reset') {
         $targets[] = [
             'db' => 'dwemer',
             'label' => 'HerikaServer',
+            'base_sql' => $herikaRoot . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . 'database_default.sql',
             'runner' => $herikaRoot . DIRECTORY_SEPARATOR . 'debug' . DIRECTORY_SEPARATOR . 'apply_db_updates.php',
         ];
     } elseif ($factoryResetTarget === 'stobe') {
         $targets[] = [
             'db' => 'stobe',
             'label' => 'StobeServer',
+            'base_sql' => dirname($herikaRoot) . DIRECTORY_SEPARATOR . 'StobeServer' . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . 'schema.sql',
             'runner' => dirname($herikaRoot) . DIRECTORY_SEPARATOR . 'StobeServer' . DIRECTORY_SEPARATOR . 'debug' . DIRECTORY_SEPARATOR . 'run_db_updates.php',
         ];
     } else {
         $targets[] = [
             'db' => 'dwemer',
             'label' => 'HerikaServer',
+            'base_sql' => $herikaRoot . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . 'database_default.sql',
             'runner' => $herikaRoot . DIRECTORY_SEPARATOR . 'debug' . DIRECTORY_SEPARATOR . 'apply_db_updates.php',
         ];
         $targets[] = [
             'db' => 'stobe',
             'label' => 'StobeServer',
+            'base_sql' => dirname($herikaRoot) . DIRECTORY_SEPARATOR . 'StobeServer' . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . 'schema.sql',
             'runner' => dirname($herikaRoot) . DIRECTORY_SEPARATOR . 'StobeServer' . DIRECTORY_SEPARATOR . 'debug' . DIRECTORY_SEPARATOR . 'run_db_updates.php',
         ];
     }
@@ -766,7 +927,26 @@ if (isset($_GET['action']) && $_GET['action'] === 'factory_reset') {
             $resetOutput
         );
         if ($resetOk) {
-            $resetOk = runPhpScriptAndCapture(strval($target['runner']), $resetOutput);
+            $baseImportOutput = '';
+            $resetOk = importSqlFileToDatabase(
+                strval($target['db']),
+                $host,
+                $port,
+                $username,
+                $password,
+                strval($target['base_sql']),
+                $baseImportOutput
+            );
+            if ($baseImportOutput !== '') {
+                $resetOutput .= ($resetOutput !== '' ? PHP_EOL . PHP_EOL : '') . '[Base schema import]' . PHP_EOL . $baseImportOutput;
+            }
+        }
+        if ($resetOk) {
+            $updateOutput = '';
+            $resetOk = runPhpScriptAndCapture(strval($target['runner']), $updateOutput);
+            if ($updateOutput !== '') {
+                $resetOutput .= ($resetOutput !== '' ? PHP_EOL . PHP_EOL : '') . '[DB updates]' . PHP_EOL . $updateOutput;
+            }
         }
         $factoryResults[] = [
             'label' => $target['label'],
@@ -901,6 +1081,9 @@ if (
 ) {
     $versionTarget = strtolower(trim(strval($_POST['version_target'] ?? 'herika')));
     try {
+        $repairOutput = '';
+        $updateOutput = '';
+        $updateOk = false;
         if ($versionTarget === 'stobe') {
             $stobeConn = getStobePgConnection($host, $port, $username, $password);
             if (!$stobeConn) {
@@ -926,22 +1109,34 @@ if (
             }
             @pg_free_result($deleteResult);
             @pg_close($stobeConn);
+            $updateOk = runPhpScriptAndCapture(dirname($herikaRoot) . DIRECTORY_SEPARATOR . 'StobeServer' . DIRECTORY_SEPARATOR . 'debug' . DIRECTORY_SEPARATOR . 'run_db_updates.php', $updateOutput);
         } else {
             $result = $db->fetchOne("SELECT COUNT(*) as count FROM public.database_versioning");
             $count = intval($result['count'] ?? 0);
             $db->execQuery("DELETE FROM public.database_versioning");
+            repairHerikaBootstrapTablesIfNeeded($db, $herikaRoot, $repairOutput);
+            $updateOk = runPhpScriptAndCapture($herikaRoot . DIRECTORY_SEPARATOR . 'debug' . DIRECTORY_SEPARATOR . 'apply_db_updates.php', $updateOutput);
         }
 
         $message = "<p><strong>All database versions reset successfully!</strong></p>";
         $message .= "<p>Reset <strong>{$count}</strong> version entries.</p>";
         $message .= "<p>Target: <strong>" . ($versionTarget === 'stobe' ? 'STOBE' : 'CHIM') . "</strong></p>";
-        $message .= "<p><strong>Important:</strong> All database updates will be re-applied on the next server restart. This may take several minutes.</p>";
+        if ($versionTarget !== 'stobe' && trim($repairOutput) !== '') {
+            $message .= "<p><strong>Bootstrap repair:</strong></p><pre>" . htmlspecialchars($repairOutput) . "</pre>";
+        }
+        $message .= "<p><strong>Immediate rebuild:</strong> " . ($updateOk ? "database updates were run immediately." : "database updates could not be run automatically; they will run on next startup.") . "</p>";
+        if (trim($updateOutput) !== '') {
+            $message .= "<pre>" . htmlspecialchars($updateOutput) . "</pre>";
+        }
     } catch (Throwable $e) {
         $message = "<p><strong>Error:</strong> " . htmlspecialchars($e->getMessage()) . "</p>";
     }
 
-    $qs = $_SERVER['QUERY_STRING'] ?? '';
-    $redirectUrl = ($_SERVER['PHP_SELF'] ?? 'database_manager.php') . ($qs ? ('?' . $qs) : '');
+    setDatabaseManagerFlashMessage($message);
+    $params = $_GET;
+    $params['version_tab'] = ($versionTarget === 'stobe') ? 'stobe' : 'chim';
+    $redirectQuery = http_build_query($params);
+    $redirectUrl = ($_SERVER['PHP_SELF'] ?? 'database_manager.php') . ($redirectQuery !== '' ? ('?' . $redirectQuery) : '');
     header('Location: ' . $redirectUrl);
     exit;
 }
@@ -2434,7 +2629,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <?php if (!empty($chimDbVersions)): ?>
                     <div class="version-panel-title-row">
                         <h4 style="margin: 0;">CHIM Version Entries (<?php echo count($chimDbVersions); ?> total)</h4>
-                        <form method="post" style="margin: 0;" onsubmit="return confirm('Reset ALL CHIM database version entries? This will cause all CHIM DB updates to re-apply on restart.');">
+                        <form method="post" style="margin: 0;" onsubmit="return confirm('Reset ALL CHIM database version entries? The dashboard will immediately rerun CHIM DB updates and repair empty bootstrap tables where possible.');">
                             <input type="hidden" name="action" value="reset_all_db_versions">
                             <input type="hidden" name="version_target" value="herika">
                             <button type="submit" class="button" style="background-color: #dc3545; color: white; padding: 8px 16px; font-size: 14px;">
@@ -2485,7 +2680,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <?php if ($stobeVersioningAvailable && !empty($stobeDbVersions)): ?>
                     <div class="version-panel-title-row">
                         <h4 style="margin: 0;">STOBE Version Entries (<?php echo count($stobeDbVersions); ?> total)</h4>
-                        <form method="post" style="margin: 0;" onsubmit="return confirm('Reset ALL STOBE database version entries? This will cause all STOBE DB updates to re-apply on restart.');">
+                        <form method="post" style="margin: 0;" onsubmit="return confirm('Reset ALL STOBE database version entries? The dashboard will immediately rerun STOBE DB updates.');">
                             <input type="hidden" name="action" value="reset_all_db_versions">
                             <input type="hidden" name="version_target" value="stobe">
                             <button type="submit" class="button" style="background-color: #dc3545; color: white; padding: 8px 16px; font-size: 14px;">
